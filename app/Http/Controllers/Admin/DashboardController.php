@@ -79,42 +79,42 @@ class DashboardController extends Controller
 
     private function getRevenueData($startDate, $endDate, $groupBy)
     {
-        $dates  = [];
+        $dates = [];
         $values = [];
-        
+
         if ($groupBy === 'month') {
-            $sqlFormat = "%Y-%m"; 
-            $step = 'addMonth';       
-            $phpFormat = 'Y-m';       
-            $displayFormat = 'm/Y';   
-            $prefix = "Thg ";         
+            $step = 'addMonth';
+            $phpFormat = 'Y-m';
+            $displayFormat = 'm/Y';
+            $prefix = "Thg ";
         } else {
-            $sqlFormat = "%Y-%m-%d";
             $phpFormat = 'Y-m-d';
-            $displayFormat = 'd/m';   
+            $displayFormat = 'd/m';
             $prefix = "";
             $step = 'addDay';
         }
 
-        $rawData = Order::select(
-                DB::raw("DATE_FORMAT(created_at, '$sqlFormat') as time_unit"),
-                DB::raw('SUM(final_amount) as total')
-            )
-            ->where('payment_status', 'paid') 
+        $orders = Order::query()
+            ->select(['created_at', 'final_amount'])
+            ->where('payment_status', 'paid')
             ->whereBetween('created_at', [$startDate, $endDate])
-            ->groupBy('time_unit')
-            ->pluck('total', 'time_unit')
-            ->toArray();
+            ->get();
+
+        $rawData = [];
+        foreach ($orders as $order) {
+            $key = $order->created_at->format($phpFormat);
+            $rawData[$key] = ($rawData[$key] ?? 0) + (float) $order->final_amount;
+        }
 
         $current = $startDate->copy();
         while ($current <= $endDate) {
             $key = $current->format($phpFormat);
             $label = $prefix . $current->format($displayFormat);
 
-            $dates[]  = $label;
+            $dates[] = $label;
             $values[] = $rawData[$key] ?? 0;
 
-            $current->$step(); 
+            $current->$step();
         }
 
         return ['dates' => $dates, 'values' => $values];
@@ -131,11 +131,15 @@ class DashboardController extends Controller
             ->pluck('total', 'payment_status')
             ->toArray();
 
-        // Map đúng thứ tự màu Frontend: Xanh (Paid), Vàng (Pending), Đỏ (Canceled)
+        $cancelledCount = ($statusCounts['cancelled'] ?? 0)
+            + ($statusCounts['canceled'] ?? 0)
+            + ($statusCounts['failed'] ?? 0);
+
+        // Map đúng thứ tự màu Frontend: Xanh (Paid), Vàng (Pending), Đỏ (Cancelled/Failed)
         return [
             $statusCounts['paid'] ?? 0,
             $statusCounts['pending'] ?? 0,
-            $statusCounts['canceled'] ?? 0
+            $cancelledCount,
         ];
     }
 }

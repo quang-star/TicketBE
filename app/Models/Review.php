@@ -13,7 +13,8 @@ class Review extends Model
         'order_id', // Thêm cái này
         'rating', 
         'comment',
-        'status'
+        'status',
+        'admin_note',
     ];
 
     public function event() {

@@ -19,8 +19,17 @@ class MyEventsController extends Controller
     public function getMyEvents(Request $request)
 {
     $user = Auth::user();
-    // Giả sử user_id là khóa ngoại trong bảng events
-    $userId = $user->id; 
+    $organizer = $user ? \App\Models\Organizer::where('user_id', $user->id)->first() : null;
+    if (!$organizer) {
+        return $this->responseApi->success([
+            'events' => [],
+            'pagination' => [
+                'total' => 0,
+                'current_page' => 1,
+                'per_page' => (int) $request->input('limit', 10),
+            ],
+        ]);
+    }
 
     // Nhận tham số
     $keyword = $request->input('keyword');
@@ -33,7 +42,7 @@ class MyEventsController extends Controller
     $query = Event::with(['venue', 'ticketTypes'])
         ->withMin('ticketTypes', 'base_price')
         ->withMin('schedules', 'start_datetime')
-        ->where('organizer_id', $user->organizer->id) // Hoặc where('user_id', $userId) tùy DB của bạn
+        ->where('organizer_id', $organizer->id)
         ->orderBy('created_at', 'desc');
 
     // 1. Lọc theo từ khóa
