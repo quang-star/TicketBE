@@ -27,4 +27,16 @@ class Handler extends ExceptionHandler
             //
         });
     }
+
+    /**
+     * Ensure API routes always return JSON errors even when requested without Accept: application/json.
+     */
+    protected function shouldReturnJson($request, Throwable $e): bool
+    {
+        if ($request->is('api/*')) {
+            return true;
+        }
+
+        return parent::shouldReturnJson($request, $e);
+    }
 }
