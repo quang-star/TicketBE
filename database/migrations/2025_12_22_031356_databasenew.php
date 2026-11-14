@@ -13,7 +13,7 @@ return new class extends Migration
             $table->id();
             $table->string('name');
             $table->string('email')->unique();
-            $table->string('password');
+            $table->string('password')->nullable();
             $table->string('phone')->nullable();
             $table->integer('role')->default(1); // 1: Customer, 2: Organizer, 3: Admin
             $table->string('avatar')->nullable();
@@ -42,6 +42,14 @@ return new class extends Migration
             $table->string('website')->nullable();
             $table->string('logo')->nullable();
             $table->boolean('verified')->default(false);
+            $table->string('bank_account_name')->nullable();
+            $table->string('bank_account_number')->nullable();
+            $table->string('bank_name')->nullable();
+            $table->string('bank_branch')->nullable();
+            $table->string('business_type')->nullable();
+            $table->string('personal_full_name')->nullable();
+            $table->string('personal_address')->nullable();
+            $table->string('tax_number')->nullable();
             $table->timestamps();
         });
 
@@ -77,6 +85,7 @@ return new class extends Migration
             $table->text('description')->nullable();
             $table->string('background_image_url')->nullable();
             $table->string('poster_image_url')->nullable();
+            $table->string('preview_image_url')->nullable();
             $table->integer('status')->default(1); // 1: Draft...
             $table->timestamps();
         });
@@ -191,6 +200,7 @@ return new class extends Migration
             $table->integer('rating');
             $table->text('comment')->nullable();
             $table->string('status')->default('pending');
+            $table->text('admin_note')->nullable();
             $table->timestamps();
         });
 
@@ -249,6 +259,7 @@ return new class extends Migration
 
     public function down(): void
     {
+        Schema::dropIfExists('reports');
         Schema::dropIfExists('payments');
         Schema::dropIfExists('payment_methods');
         Schema::dropIfExists('admin_logs');
@@ -268,6 +279,5 @@ return new class extends Migration
         Schema::dropIfExists('organizers');
         Schema::dropIfExists('user_verifications');
         Schema::dropIfExists('users');
-        Schema::dropIfExists('reports');
     }
 };
