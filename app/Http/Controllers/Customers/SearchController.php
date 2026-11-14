@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 class SearchController extends Controller
 {
     private $responseApi;
-    
+
     public function __construct()
     {
         $this->responseApi = new ResponseApi();
@@ -18,26 +18,23 @@ class SearchController extends Controller
 
     public function searchEvents(Request $request)
     {
-        // 1. Nhận tham số
-        $q     = $request->query('q');
-        $from  = $request->query('from');
-        $to    = $request->query('to');
-        $local = $request->query('local'); 
-        $price = $request->query('price'); 
-        $cate  = $request->query('cate');
-        
-        // [QUAN TRỌNG] Xử lý phân trang
-        $limit  = (int) $request->input('limit', 12); // Mặc định 12
-        $page   = (int) $request->input('page', 1);   // Mặc định trang 1
+        $q = $request->query('q');
+        $from = $request->query('from');
+        $to = $request->query('to');
+        $local = $request->query('local');
+        $price = $request->query('price');
+        $cate = $request->query('cate');
+
+        $limit = max(1, min(50, (int) $request->input('limit', 12)));
+        $page = max(1, (int) $request->input('page', 1));
         $offset = ($page - 1) * $limit;
 
         $query = Event::query()
-            ->with(['venue', 'category']) 
+            ->with(['venue', 'category', 'categories'])
             ->withMin('schedules as schedules_min_start_datetime', 'start_datetime')
             ->withMin('ticketTypes as ticket_types_min_base_price', 'base_price')
             ->where('status', Event::STATUS_PUBLISHED);
 
-        // --- CÁC ĐIỀU KIỆN LỌC (GIỮ NGUYÊN) ---
         if (!empty($q)) {
             $query->where(function ($sub) use ($q) {
                 $sub->where('event_name', 'LIKE', '%' . $q . '%')
@@ -47,14 +44,22 @@ class SearchController extends Controller
 
         if (!empty($local) && $local !== 'all') {
             $query->whereHas('venue', function ($v) use ($local) {
-                $v->where('city', $local);
+                if (is_numeric($local)) {
+                    $v->where('city', $local);
+                } else {
+                    $v->where('city', 'LIKE', '%' . $local . '%');
+                }
             });
         }
 
         if (!empty($from) || !empty($to)) {
             $query->whereHas('schedules', function ($s) use ($from, $to) {
-                if (!empty($from)) $s->whereDate('start_datetime', '>=', $from);
-                if (!empty($to))   $s->whereDate('start_datetime', '<=', $to);
+                if (!empty($from)) {
+                    $s->whereDate('start_datetime', '>=', $from);
+                }
+                if (!empty($to)) {
+                    $s->whereDate('start_datetime', '<=', $to);
+                }
             });
         }
 
@@ -65,31 +70,35 @@ class SearchController extends Controller
         }
 
         if (!empty($cate)) {
-            $cateIds = explode(',', $cate);
+            $cateIds = array_values(array_filter(array_map('trim', explode(',', $cate))));
             if (!empty($cateIds)) {
-                $query->whereIn('category_id', $cateIds);
+                $query->where(function ($sub) use ($cateIds) {
+                    $sub->whereIn('category_id', $cateIds)
+                        ->orWhereHas('categories', function ($c) use ($cateIds) {
+                            $c->whereIn('event_categories.id', $cateIds);
+                        });
+                });
             }
         }
 
-        // Sắp xếp
-        $query->orderBy('schedules_min_start_datetime', 'asc');
+        $events = $query
+            ->orderBy('schedules_min_start_datetime', 'asc')
+            ->skip($offset)
+            ->take($limit)
+            ->get();
 
-        // [QUAN TRỌNG] Áp dụng phân trang
-        $query->skip($offset)->take($limit);
-
-        $events = $query->get();
-
-        // Map data trả về
         $data = $events->map(function (Event $e) {
+            $cat = $e->category ?? $e->categories->first();
+
             return [
                 'id' => $e->id,
                 'event_name' => $e->event_name,
                 'background_image_url' => $e->background_image_url,
                 'ticket_types_min_base_price' => (int) $e->ticket_types_min_base_price,
                 'schedules_min_start_datetime' => $e->schedules_min_start_datetime,
-                'location' => optional($e->venue)->city, 
-                'category_id' => optional($e->category)->id,
-                'category_name' => optional($e->category)->name,
+                'location' => optional($e->venue)->city,
+                'category_id' => optional($cat)->id,
+                'category_name' => optional($cat)->name,
             ];
         });
 

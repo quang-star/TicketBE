@@ -40,7 +40,8 @@ class OrderController extends Controller
                 'events.poster_image_url',
                 'events.background_image_url',
                 'venues.name as venue_name',
-                //'venues.address as venue_address',
+                'venues.street as venue_street',
+                'venues.city as venue_city',
 
                 // --- Level 3: Schedule ---
                 'event_schedules.id as schedule_id',
@@ -48,6 +49,7 @@ class OrderController extends Controller
                 'event_schedules.end_datetime',
                 
                 // --- Level 4: Ticket Item ---
+                'order_items.id as order_item_id',
                 'ticket_types.name as ticket_name',
                 'order_items.quantity',
                 'order_items.unit_price',
@@ -60,13 +62,20 @@ class OrderController extends Controller
             ->orderBy('orders.created_at', 'desc')
             ->get();
 
+        $orderItemIds = $rawItems->pluck('order_item_id')->unique()->values();
+        $ticketsByOrderItem = DB::table('tickets')
+            ->whereIn('order_item_id', $orderItemIds)
+            ->select('id', 'order_item_id', 'qr_code', 'status', 'issued_at')
+            ->get()
+            ->groupBy('order_item_id');
+
         // 2. GROUPING DATA (3 Levels)
-        $formattedOrders = $rawItems->groupBy('order_id')->map(function ($itemsInOrder) {
+        $formattedOrders = $rawItems->groupBy('order_id')->map(function ($itemsInOrder) use ($ticketsByOrderItem) {
             
             $orderInfo = $itemsInOrder->first();
 
             // GROUP BY EVENT
-            $events = $itemsInOrder->groupBy('event_id')->map(function ($itemsInEvent) {
+            $events = $itemsInOrder->groupBy('event_id')->map(function ($itemsInEvent) use ($ticketsByOrderItem) {
                 $eventInfo = $itemsInEvent->first();
 
                 // Xử lý ảnh & địa điểm
@@ -74,21 +83,30 @@ class OrderController extends Controller
                     ?? $eventInfo->background_image_url 
                     ?? '/images/default.jpg';
                 
-                $location = $eventInfo->venue_name 
-                    ? $eventInfo->venue_name . ', ' . ($eventInfo->venue_address ?? '') 
-                    : 'Chưa cập nhật';
+                $locParts = array_filter([$eventInfo->venue_name, $eventInfo->venue_street]);
+                $location = count($locParts) > 0 ? implode(', ', $locParts) : 'Chưa cập nhật';
 
                 // GROUP BY SCHEDULE (Tách suất diễn)
-                $schedules = $itemsInEvent->groupBy('schedule_id')->map(function ($itemsInSchedule) {
+                $schedules = $itemsInEvent->groupBy('schedule_id')->map(function ($itemsInSchedule) use ($ticketsByOrderItem) {
                     $scheduleInfo = $itemsInSchedule->first();
 
                     // LIST TICKETS
-                    $tickets = $itemsInSchedule->map(function ($item) {
+                    $tickets = $itemsInSchedule->map(function ($item) use ($ticketsByOrderItem) {
+                        $issued = ($ticketsByOrderItem[$item->order_item_id] ?? collect())->map(function ($t) {
+                            return [
+                                'id' => $t->id,
+                                'qrCode' => $t->qr_code,
+                                'status' => $t->status,
+                                'issuedAt' => $t->issued_at,
+                            ];
+                        })->values();
+
                         return [
                             'ticketName' => $item->ticket_name,
                             'quantity'   => $item->quantity,
                             'unitPrice'  => $item->unit_price,
-                            'total'      => $item->quantity * $item->unit_price
+                            'total'      => $item->quantity * $item->unit_price,
+                            'issuedTickets' => $issued,
                         ];
                     });
 

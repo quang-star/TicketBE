@@ -24,6 +24,7 @@ class Event extends Model
         'description',
         'background_image_url',
         'poster_image_url',
+        'preview_image_url',
         'status',
     ];
     protected $appends = [
@@ -32,6 +33,9 @@ class Event extends Model
 
     public function getTicketTypesMinBasePriceAttribute()
     {
+        if (array_key_exists('ticket_types_min_base_price', $this->attributes)) {
+            return $this->attributes['ticket_types_min_base_price'];
+        }
         return $this->ticketTypes()->min('base_price');
     }
 
@@ -63,7 +67,7 @@ class Event extends Model
 
     public function reviews()
     {
-        return $this->hasMany(Review::class)->where('status', 'approved');
+        return $this->hasMany(Review::class)->whereIn('status', ['active', 'approved']);
     }
     
     // Tính điểm trung bình sao
