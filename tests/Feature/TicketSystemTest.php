@@ -22,8 +22,10 @@ use App\Services\PayOSService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Laravel\Passport\ClientRepository;
 use Laravel\Passport\Passport;
 use Mockery;
 use Tests\TestCase;
@@ -467,5 +469,39 @@ class TicketSystemTest extends TestCase
         $this->getJson('/api/admin/dashboard-revenue')
             ->assertStatus(200)
             ->assertJsonPath('data.order_chart.2', 1);
+    }
+
+    public function test_api_unauthenticated_without_accept_header_returns_401_and_google_login_issues_token(): void
+    {
+        $this->get('/api/get-cart')
+            ->assertStatus(401)
+            ->assertJson(['message' => 'Unauthenticated.']);
+
+        app(ClientRepository::class)->createPersonalAccessClient(
+            null,
+            'Test Personal Access Client',
+            'http://localhost'
+        );
+
+        Http::fake([
+            'https://www.googleapis.com/oauth2/v3/userinfo' => Http::response([
+                'name' => 'Google User',
+                'email' => 'googleuser@example.com',
+                'picture' => 'https://example.com/avatar.png',
+            ], 200),
+        ]);
+
+        $response = $this->postJson('/api/loginwithgoogle', [
+            'access_token' => 'fake-google-access-token',
+        ])->assertStatus(200)
+            ->assertJsonPath('code', 200);
+
+        $accessToken = $response->json('data.accessToken');
+        $this->assertIsString($accessToken);
+        $this->assertGreaterThan(255, strlen($accessToken));
+        $this->assertDatabaseHas('users', [
+            'email' => 'googleuser@example.com',
+            'device_token' => $accessToken,
+        ]);
     }
 }
