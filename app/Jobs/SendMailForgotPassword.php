@@ -30,6 +30,10 @@ class SendMailForgotPassword implements ShouldQueue
      */
     public function handle(): void
     {
+        if (!$this->user) {
+            return;
+        }
+
         MailService::sendMailForgotPassword($this->user);
     }
 }

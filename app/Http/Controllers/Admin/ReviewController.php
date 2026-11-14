@@ -42,6 +42,10 @@ class ReviewController extends Controller
 
     public function updateReviewStatus(Request $request, $id)
     {
+        $request->validate([
+            'status' => 'required|in:pending,active,hidden',
+        ]);
+
         $review = Review::findOrFail($id);
         $review->update(['status' => $request->status]);
         return response()->json(['code' => 200, 'message' => 'Success']);

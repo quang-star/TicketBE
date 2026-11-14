@@ -3,85 +3,115 @@
 namespace App\Http\Controllers\Customers;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SendTicketEmailJob;
+use App\Models\Cart;
+use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\TicketType;
-use App\Models\Cart;
-use App\Models\CartItem;
 use App\Services\PayOSService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Jobs\SendTicketEmailJob;
+use Illuminate\Support\Facades\Validator;
+
 class PaymentController extends Controller
 {
-    // =========================================================================
-    // PRIVATE HELPER FUNCTIONS
-    // =========================================================================
-
-    /**
-     * Helper: Hoàn lại số lượng tồn kho khi hủy/lỗi
-     */
-    private function restoreStock(Order $order)
+    private function restoreStock(Order $order): void
     {
         $orderItems = OrderItem::where('order_id', $order->id)->get();
 
         foreach ($orderItems as $item) {
-            // Cộng lại số lượng vào kho
             TicketType::where('id', $item->ticket_type_id)
                 ->increment('available_quantity', $item->quantity);
         }
     }
 
-    /**
-     * Helper: Xóa các item đã mua khỏi giỏ hàng (Cách 2)
-     */
-    private function clearCart($userId, Order $order)
+    private function clearCart($userId, Order $order): void
     {
-        // 1. Tìm giỏ hàng của user
         $cart = Cart::where('user_id', $userId)->first();
+        if (!$cart) {
+            return;
+        }
 
-        if (!$cart) return;
-
-        // 2. Lấy danh sách ID các loại vé CÓ trong Order vừa thanh toán
         $purchasedTicketTypeIds = OrderItem::where('order_id', $order->id)
             ->pluck('ticket_type_id')
             ->toArray();
 
-        if (empty($purchasedTicketTypeIds)) return;
+        if (empty($purchasedTicketTypeIds)) {
+            return;
+        }
 
-        // 3. Chỉ xóa các item trùng khớp trong bảng cart_items
         CartItem::where('cart_id', $cart->id)
             ->whereIn('ticket_type_id', $purchasedTicketTypeIds)
             ->delete();
-            
-        // (Tùy chọn) Xóa cart rỗng nếu cần
-        // if (CartItem::where('cart_id', $cart->id)->doesntExist()) $cart->delete();
     }
 
-    // =========================================================================
-    // PUBLIC FUNCTIONS (API)
-    // =========================================================================
+    private function finalizePaidOrder(Order $order): void
+    {
+        $shouldDispatch = false;
 
-    /**
-     * Tạo order và link thanh toán online
-     */
+        DB::transaction(function () use ($order, &$shouldDispatch) {
+            $locked = Order::where('id', $order->id)->lockForUpdate()->first();
+            if (!$locked || $locked->payment_status !== 'pending') {
+                return;
+            }
+
+            $locked->update(['payment_status' => 'paid']);
+            $this->clearCart($locked->user_id, $locked);
+            $shouldDispatch = true;
+        });
+
+        if ($shouldDispatch) {
+            $order->refresh();
+            $order->loadMissing('user');
+            SendTicketEmailJob::dispatch($order);
+        }
+    }
+
+    private function markOrderUnpaid(Order $order, string $newStatus): void
+    {
+        DB::transaction(function () use ($order, $newStatus) {
+            $locked = Order::where('id', $order->id)->lockForUpdate()->first();
+            if (!$locked || $locked->payment_status !== 'pending') {
+                return;
+            }
+
+            $locked->update(['payment_status' => $newStatus]);
+            $this->restoreStock($locked);
+        });
+    }
+
     public function createOrder(Request $request)
     {
-        $userId = Auth::id() ?? $request->input('user_id');
-        $params = $request->all();
-
-        if (empty($params['items']) || !is_array($params['items'])) {
-            return response()->json(['code' => 400, 'message' => 'Giỏ hàng trống'], 400);
+        $userId = Auth::id();
+        if (!$userId) {
+            return response()->json(['code' => 401, 'message' => 'Unauthenticated'], 401);
         }
+
+        $validator = Validator::make($request->all(), [
+            'items' => 'required|array|min:1',
+            'items.*.ticket_type_id' => 'required|integer|exists:ticket_types,id',
+            'items.*.quantity' => 'required|integer|min:1|max:100',
+            'return_path' => 'nullable|string|max:500',
+            'payment_method' => 'nullable|string|max:50',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'code' => 422,
+                'message' => $validator->errors()->first(),
+            ], 422);
+        }
+
+        $params = $validator->validated();
 
         DB::beginTransaction();
         try {
-            // 1. Tạo Order (Pending)
             $order = Order::create([
                 'user_id' => $userId,
-                'order_code' => '', // Tạo xong sẽ update lại
+                'order_code' => '',
                 'total_amount' => 0,
                 'discount_amount' => 0,
                 'final_amount' => 0,
@@ -90,16 +120,15 @@ class PaymentController extends Controller
                 'payment_method' => $params['payment_method'] ?? 'payos',
             ]);
 
-            $order->update(['order_code' => $order->id]);
+            $orderCode = (string) ((int) ($order->id * 1000) + random_int(100, 999));
+            $order->update(['order_code' => $orderCode]);
 
             $orderItemsData = [];
             $total = 0;
 
-            // 2. Xử lý từng item
             foreach ($params['items'] as $item) {
-                if (!isset($item['ticket_type_id'], $item['quantity'])) continue;
+                $qty = (int) $item['quantity'];
 
-                // --- QUAN TRỌNG: Lock row để tránh race condition ---
                 $ticketType = TicketType::where('id', $item['ticket_type_id'])
                     ->lockForUpdate()
                     ->first();
@@ -109,178 +138,174 @@ class PaymentController extends Controller
                     return response()->json(['code' => 404, 'message' => 'Không tìm thấy vé'], 404);
                 }
 
-                // Kiểm tra số lượng tồn
-                if ($ticketType->available_quantity < $item['quantity']) {
+                if ($ticketType->available_quantity < $qty) {
                     DB::rollBack();
                     return response()->json([
-                        'code' => 400, 
-                        'message' => "Vé '{$ticketType->name}' chỉ còn {$ticketType->available_quantity}, không đủ."
+                        'code' => 400,
+                        'message' => "Vé '{$ticketType->name}' chỉ còn {$ticketType->available_quantity}, không đủ.",
                     ], 400);
                 }
 
-                // Trừ kho
-                $ticketType->decrement('available_quantity', $item['quantity']);
+                $ticketType->decrement('available_quantity', $qty);
 
-                // Tính tiền
-                $subtotal = $ticketType->base_price * $item['quantity'];
+                $subtotal = $ticketType->base_price * $qty;
                 $total += $subtotal;
 
-                // Lưu OrderItem
                 OrderItem::create([
                     'order_id' => $order->id,
                     'ticket_type_id' => $ticketType->id,
-                    'quantity' => $item['quantity'],
+                    'quantity' => $qty,
                     'unit_price' => $ticketType->base_price,
                     'subtotal' => $subtotal,
                 ]);
 
-                // Chuẩn bị data cho PayOS
                 $orderItemsData[] = [
                     'name' => $ticketType->name,
-                    'quantity' => $item['quantity'],
-                    'price' => (float)$ticketType->base_price,
+                    'quantity' => $qty,
+                    'price' => (float) $ticketType->base_price,
                 ];
             }
 
             $order->update(['total_amount' => $total, 'final_amount' => $total]);
 
-            // 3. Tạo link PayOS
-            Log::info('payload_payos', ['order' => $order, 'items' => $orderItemsData]);
-            
+            Log::info('payload_payos', ['order_id' => $order->id, 'order_code' => $orderCode]);
+
             $paymentLink = PayOSService::createPaymentLink($order, $orderItemsData);
 
             if (!$paymentLink || !isset($paymentLink['checkoutUrl'])) {
-                DB::rollBack(); // PayOS lỗi -> Rollback kho
+                DB::rollBack();
                 return response()->json(['code' => 500, 'message' => 'Lỗi tạo link thanh toán'], 500);
             }
 
-            DB::commit(); // Thành công -> Lưu DB
+            DB::commit();
 
             return response()->json([
                 'code' => 200,
                 'message' => 'Order tạo thành công',
                 'data' => [
                     'order_id' => $order->id,
-                    'checkout_url' => $paymentLink['checkoutUrl']
-                ]
+                    'order_code' => $order->order_code,
+                    'checkout_url' => $paymentLink['checkoutUrl'],
+                ],
             ]);
-
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error($th->getMessage());
-            return response()->json(['code' => 500, 'message' => 'Lỗi server', 'error' => $th->getMessage()], 500);
+            return response()->json(['code' => 500, 'message' => 'Lỗi server'], 500);
         }
     }
 
-    /**
-     * Kiểm tra trạng thái thanh toán (API Check)
-     */
     public function checkPaymentStatus(Request $request)
     {
-        $orderCode = $request->order_code;
-        if (!$orderCode) return response()->json(['code' => 400, 'message' => 'Thiếu order_code'], 400);
+        $orderCode = $request->input('order_code');
+        if (!$orderCode) {
+            return response()->json(['code' => 400, 'message' => 'Thiếu order_code'], 400);
+        }
+
+        $order = Order::where('order_code', (string) $orderCode)
+            ->where('user_id', Auth::id())
+            ->first();
+
+        if (!$order) {
+            return response()->json(['code' => 404, 'message' => 'Không tìm thấy đơn hàng'], 404);
+        }
 
         try {
             $data = PayOSService::getPaymentStatus($orderCode);
-            if (!$data) return response()->json(['code' => 500, 'message' => 'Lỗi lấy trạng thái'], 500);
+            if (!$data) {
+                return response()->json(['code' => 500, 'message' => 'Lỗi lấy trạng thái'], 500);
+            }
 
-            $order = Order::where('order_code', $orderCode)->first();
-            if ($order) {
-                $status = $data['status'] ?? 'FAILED';
-                $order->payment_status = match ($status) {
-                    'PAID' => 'paid',
-                    'PENDING' => 'pending',
-                    default => 'failed'
-                };
-                $order->save();
+            $status = $data['status'] ?? 'FAILED';
+            if ($status === 'PAID') {
+                $this->finalizePaidOrder($order);
+            } elseif ($status !== 'PENDING') {
+                $this->markOrderUnpaid($order, $status === 'CANCELLED' ? 'cancelled' : 'failed');
             }
 
             return response()->json(['code' => 200, 'message' => 'Success', 'data' => $data]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json(['code' => 500, 'message' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Xử lý khi khách hàng thanh toán xong và được chuyển về (Return URL)
-     */
-    public function payosReturn(Request $request)
+    public function payOSReturn(Request $request)
     {
-        $payosOrderCode = $request->orderCode;
-        $frontendUrl = 'http://localhost:5173'; // Tốt nhất nên dùng config('app.frontend_url')
+        $payosOrderCode = $request->input('orderCode');
+        $frontendUrl = rtrim(config('app.frontend_url', 'http://localhost:5173'), '/');
 
-        if (!$payosOrderCode) return redirect("$frontendUrl/cart?status=error&message=missing_code");
+        if (!$payosOrderCode) {
+            return redirect("$frontendUrl/cart?status=error&message=missing_code");
+        }
 
-        // Eager load user để Job dùng luôn, đỡ phải query lại trong Job
-        $order = Order::where('order_code', $payosOrderCode)->with('user')->first();
-        
-        if (!$order) return redirect("$frontendUrl/cart?status=error&message=order_not_found");
+        $order = Order::where('order_code', (string) $payosOrderCode)->with('user')->first();
+        if (!$order) {
+            return redirect("$frontendUrl/cart?status=error&message=order_not_found");
+        }
 
-        // Nếu đã PAID rồi -> chuyển về cart báo success luôn
         if ($order->payment_status === 'paid') {
             return redirect("$frontendUrl/cart?status=success&id={$order->id}");
         }
 
         try {
             $paymentInfo = PayOSService::getPaymentStatus($payosOrderCode);
-            
-            // 1. THANH TOÁN THẤT BẠI
+
             if (!$paymentInfo || ($paymentInfo['status'] ?? '') !== 'PAID') {
-                if ($order->payment_status === 'pending') {
-                    $order->update(['payment_status' => 'failed']);
-                    $this->restoreStock($order);
-                }
+                $this->markOrderUnpaid($order, 'failed');
                 return redirect("$frontendUrl/cart?status=failed&id={$order->id}");
             }
 
-            // 2. THANH TOÁN THÀNH CÔNG
-            if ($order->payment_status === 'pending') {
-                $order->update(['payment_status' => 'paid']);
-                
-                // Xóa item đã mua khỏi Cart
-                $this->clearCart($order->user_id, $order);
+            $this->finalizePaidOrder($order);
 
-                // --- GỌI QUEUE JOB ---
-                // Việc nặng (tạo QR, gửi mail) sẽ được xử lý ngầm
-                SendTicketEmailJob::dispatch($order);
-            }
-            
-            // Redirect NGAY LẬP TỨC để user không phải chờ
             return redirect("$frontendUrl/cart?status=success&id={$order->id}");
-
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("PayOS Return Error: " . $e->getMessage());
             return redirect("$frontendUrl/cart?status=error&message=system_error&id={$order->id}");
         }
     }
 
-    /**
-     * Xử lý khi khách hàng hủy thanh toán (Cancel URL)
-     */
-    public function payosCancel(Request $request)
+    public function payOSWebhook(Request $request)
     {
-        $payosOrderCode = $request->orderCode;
-        $frontendUrl = 'http://localhost:5173';
+        $verifiedData = PayOSService::verifyWebhookData($request->all());
+        if (!$verifiedData || empty($verifiedData['orderCode'])) {
+            return response()->json(['code' => 400, 'message' => 'Invalid webhook signature'], 400);
+        }
 
-        if (!$payosOrderCode) return redirect("$frontendUrl/cart");
+        $order = Order::where('order_code', (string) $verifiedData['orderCode'])
+            ->with('user')
+            ->first();
 
-        $order = Order::where('order_code', $payosOrderCode)->first();
-        if (!$order) return redirect("$frontendUrl/cart");
+        if (!$order) {
+            return response()->json(['code' => 404, 'message' => 'Order not found'], 404);
+        }
 
-        // Nếu đã thanh toán rồi thì vẫn báo success
+        if (($verifiedData['code'] ?? '') === '00') {
+            $this->finalizePaidOrder($order);
+        }
+
+        return response()->json(['code' => 200, 'message' => 'OK']);
+    }
+
+    public function payOSCancel(Request $request)
+    {
+        $payosOrderCode = $request->input('orderCode');
+        $frontendUrl = rtrim(config('app.frontend_url', 'http://localhost:5173'), '/');
+
+        if (!$payosOrderCode) {
+            return redirect("$frontendUrl/cart");
+        }
+
+        $order = Order::where('order_code', (string) $payosOrderCode)->first();
+        if (!$order) {
+            return redirect("$frontendUrl/cart");
+        }
+
         if ($order->payment_status === 'paid') {
             return redirect("$frontendUrl/cart?status=success&id={$order->id}");
         }
 
-        // Xử lý Hủy
-        if ($order->payment_status === 'pending') {
-            $order->update(['payment_status' => 'cancelled']);
-            
-            // QUAN TRỌNG: Hoàn lại kho ngay lập tức
-            $this->restoreStock($order);
-        }
+        $this->markOrderUnpaid($order, 'cancelled');
 
-        // Redirect về Cart kèm status cancelled
         return redirect("$frontendUrl/cart?status=cancelled&id={$order->id}");
     }
 }

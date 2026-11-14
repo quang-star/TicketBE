@@ -4,27 +4,39 @@ namespace App\Helpers;
 
 class DescriptionImageHelper
 {
+    private const ALLOWED_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+
     /**
      * Lưu tất cả ảnh Base64 trong HTML description ra file thật
      * và thay src thành đường dẫn file
      */
     public static function saveImages($html)
     {
-        return preg_replace_callback('/<img\s+[^>]*src="data:image\/(.*?);base64,(.*?)"[^>]*>/', function($matches) {
-            $ext = $matches[1]; // png, jpg, ...
-            $data = base64_decode($matches[2]);
-            $filename = uniqid() . '.' . $ext;
+        if (!is_string($html) || $html === '') {
+            return '';
+        }
 
-            // tạo thư mục nếu chưa có
+        return preg_replace_callback('/<img\s+[^>]*src="data:image\/([a-zA-Z0-9+]+);base64,([^"]*)"[^>]*>/', function ($matches) {
+            $rawExt = strtolower($matches[1]);
+            $ext = $rawExt === 'jpeg' ? 'jpg' : $rawExt;
+            if (!in_array($ext, self::ALLOWED_EXTS, true)) {
+                return '';
+            }
+
+            $data = base64_decode($matches[2], true);
+            if ($data === false) {
+                return '';
+            }
+
+            $filename = uniqid('', true) . '.' . $ext;
             $dir = public_path('description_images');
             if (!file_exists($dir)) {
                 mkdir($dir, 0755, true);
             }
 
-            $path = $dir . '/' . $filename;
-            file_put_contents($path, $data);
+            file_put_contents($dir . '/' . $filename, $data);
 
-            return '<img src="http://127.0.0.1:8000/description_images/' . $filename . '" />';
+            return '<img src="' . url('description_images/' . $filename) . '" />';
         }, $html);
     }
 }

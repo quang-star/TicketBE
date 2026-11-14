@@ -19,6 +19,14 @@ class Organizer extends Model
         'website',
         'verified',
         'logo',
+        'bank_account_name',
+        'bank_account_number',
+        'bank_name',
+        'bank_branch',
+        'business_type',
+        'personal_full_name',
+        'personal_address',
+        'tax_number',
     ];
 
     public function user()

@@ -19,6 +19,10 @@ class ContentModeratorService
 
     public function checkContent($text)
     {
+        if (empty($this->apiKey)) {
+            return ['is_safe' => true];
+        }
+
         try {
             // Prompt bắt buộc trả về JSON
             $prompt = "
@@ -28,7 +32,7 @@ class ContentModeratorService
                 { \"is_safe\": true/false, \"reason\": \"Lý do ngắn gọn (tiếng Việt) nếu false\", \"score\": 0-10 }
             ";
 
-            $response = Http::withHeaders(['Content-Type' => 'application/json'])
+            $response = Http::timeout(5)->withHeaders(['Content-Type' => 'application/json'])
                 ->post($this->apiUrl, [
                     'contents' => [['parts' => [['text' => $prompt]]]]
                 ]);
