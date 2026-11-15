@@ -16,11 +16,11 @@ class UpcomingEventsSeeder extends Seeder
     {
         $now = Carbon::now();
 
-        // 1. Đảm bảo đủ 4 danh mục chuẩn
+        // 1. Đảm bảo đủ 4 danh mục chuẩn (khớp ID với DB & IndexController)
         $categories = [
             1 => 'Nhạc sống',
-            2 => 'Sân khấu & Nghệ thuật',
-            3 => 'Thể thao',
+            2 => 'Thể thao',
+            3 => 'Sân khấu và Nghệ thuật',
             4 => 'Khác',
         ];
 
@@ -788,32 +788,40 @@ class UpcomingEventsSeeder extends Seeder
             $this->command->warn("APP_URL hiện là '{$baseUrl}'. Trên production nhớ đặt APP_URL là URL HTTPS của backend (vd: https://api.quanglab.site) trước khi chạy seeder để ảnh load đúng.");
         }
 
+        $categoryMap = [
+            'music' => 1,
+            'sport' => 2,
+            'stage' => 3,
+            'tech' => 4,
+        ];
+
         foreach ($eventsCatalog as $item) {
+            $categoryId = $categoryMap[$item['org_key']] ?? $item['category_id'];
             $imageUrl = $baseUrl . '/' . ltrim($item['image'], '/');
 
             $existingEvent = Event::where('event_name', $item['event_name'])->first();
             if ($existingEvent) {
                 $existingEvent->update([
+                    'category_id' => $categoryId,
                     'background_image_url' => $imageUrl,
                     'poster_image_url' => $imageUrl,
-                    'preview_image_url' => $imageUrl,
                 ]);
+                $existingEvent->categories()->syncWithoutDetaching([$categoryId]);
                 continue;
             }
 
             $event = Event::create([
                 'organizer_id' => $organizerIds[$item['org_key']],
                 'venue_id' => $venueIds[$item['venue_key']],
-                'category_id' => $item['category_id'],
+                'category_id' => $categoryId,
                 'event_name' => $item['event_name'],
                 'description' => $item['description'],
                 'background_image_url' => $imageUrl,
                 'poster_image_url' => $imageUrl,
-                'preview_image_url' => $imageUrl,
                 'status' => Event::STATUS_PUBLISHED,
             ]);
 
-            $event->categories()->syncWithoutDetaching([$item['category_id']]);
+            $event->categories()->syncWithoutDetaching([$categoryId]);
 
             foreach ($item['schedules'] as [$startStr, $endStr]) {
                 $start = Carbon::parse($startStr);
@@ -852,6 +860,72 @@ class UpcomingEventsSeeder extends Seeder
                     'status' => TicketType::STATUS_ACTIVE,
                 ]);
             }
+        }
+
+        $this->seedTrendingOrders($now);
+    }
+
+    private function seedTrendingOrders(Carbon $now): void
+    {
+        $buyerId = DB::table('users')->where('role', 1)->value('id')
+            ?? DB::table('users')->value('id');
+        if (!$buyerId) {
+            return;
+        }
+
+        $minEnd = $now->copy()->addDays(28);
+        $topEvents = Event::where('status', Event::STATUS_PUBLISHED)
+            ->whereHas('schedules', fn($q) => $q->where('end_datetime', '>=', $minEnd))
+            ->with(['schedules' => fn($q) => $q->where('end_datetime', '>=', $minEnd)->orderBy('start_datetime')])
+            ->orderBy('id')
+            ->limit(10)
+            ->get();
+
+        foreach ($topEvents as $idx => $event) {
+            $schedule = $event->schedules->first();
+            if (!$schedule) {
+                continue;
+            }
+            $ticketType = TicketType::where('schedule_id', $schedule->id)->first();
+            if (!$ticketType) {
+                continue;
+            }
+
+            $orderCode = 'TKB-TREND-UP-' . $event->id;
+            $qty = 95 - ($idx * 5);
+            $amount = $qty * (int) $ticketType->base_price;
+            $createdAt = $now->copy()->subHours($idx);
+
+            $existingOrder = DB::table('orders')->where('order_code', $orderCode)->first();
+            if ($existingOrder) {
+                DB::table('orders')->where('id', $existingOrder->id)->update([
+                    'created_at' => $createdAt,
+                    'updated_at' => $now,
+                ]);
+                continue;
+            }
+
+            $orderId = DB::table('orders')->insertGetId([
+                'user_id' => $buyerId,
+                'order_code' => $orderCode,
+                'total_amount' => $amount,
+                'discount_amount' => 0,
+                'final_amount' => $amount,
+                'payment_status' => 'paid',
+                'payment_method' => 'payos',
+                'created_at' => $createdAt,
+                'updated_at' => $now,
+            ]);
+
+            DB::table('order_items')->insert([
+                'order_id' => $orderId,
+                'ticket_type_id' => $ticketType->id,
+                'quantity' => $qty,
+                'unit_price' => (int) $ticketType->base_price,
+                'subtotal' => $amount,
+                'created_at' => $createdAt,
+                'updated_at' => $now,
+            ]);
         }
     }
 }
