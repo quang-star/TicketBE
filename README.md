@@ -1,68 +1,100 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Ticket Backend (`ticket_backend`)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+## Giới thiệu dự án
 
-## About Laravel
+**Ticket Backend** là hệ thống RESTful API được xây dựng trên nền tảng **Laravel 10**, đóng vai trò xử lý nghiệp vụ, xác thực người dùng, quản lý dữ liệu và tích hợp cổng thanh toán cho ứng dụng đặt vé sự kiện trực tuyến **Ticket** (`ticketvue`).
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Các phân hệ và chức năng chính
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+### 1. Xác thực & Quản lý tài khoản (`/api/login`, `/api/register`, ...)
+- Đăng ký tài khoản mới và xác thực tài khoản bằng mã xác nhận gửi qua email (`/verifyAccount`, `/resend-code`).
+- Đăng nhập truyền thống (JWT/OAuth2 qua **Laravel Passport**), đăng nhập bằng Google (`/loginwithgoogle`), quên mật khẩu & đặt lại mật khẩu.
+- Cập nhật thông tin cá nhân và đổi mật khẩu.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### 2. Nghiệp vụ Khách hàng (Customer)
+- **Khám phá & Tìm kiếm sự kiện:** Cung cấp API lấy danh sách sự kiện xu hướng, cuối tuần, cuối tháng, theo danh mục, chi tiết sự kiện, thông tin ban tổ chức và tìm kiếm sự kiện theo bộ lọc.
+- **Giỏ hàng & Đơn hàng:** Thêm/sửa/xóa vé trong giỏ hàng, tạo đơn hàng, xem lịch sử đơn hàng và chi tiết vé kèm mã QR (`simple-qrcode`).
+- **Thanh toán trực tuyến qua PayOS:** Tạo liên kết thanh toán qua `payos/payos`, xử lý callback `return`, `cancel`, `webhook` và kiểm tra trạng thái thanh toán (`/payment/status`).
+- **Đánh giá & Báo cáo:** Gửi đánh giá sự kiện và báo cáo vi phạm cho sự kiện.
 
-## Learning Laravel
+### 3. Nghiệp vụ Ban tổ chức (Organizer)
+- Lấy danh mục sự kiện, thông tin ban tổ chức (`/organizer/getInfo`).
+- Tạo sự kiện mới (`/create-event`) và xem danh sách sự kiện đã tạo (`/organizer/my-events`).
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+### 4. Nghiệp vụ Quản trị viên (Admin — middleware `auth:api`, `role:3`)
+- **Thống kê Dashboard:** Số liệu tổng quan (`/admin/dashboard-stats`) và biểu đồ doanh thu (`/admin/dashboard-revenue`).
+- **Kiểm duyệt sự kiện:** Xem danh sách sự kiện chờ duyệt, xem chi tiết, phê duyệt hoặc từ chối sự kiện.
+- **Quản lý hệ thống:** Theo dõi đơn hàng đã thanh toán, danh sách ban tổ chức, kiểm duyệt trạng thái đánh giá và xử lý báo cáo từ người dùng.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+## Công nghệ sử dụng
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+- **Framework:** Laravel 10 (PHP `^8.1`)
+- **Database:** MySQL
+- **Xác thực:** Laravel Passport (`^12.4`)
+- **Thanh toán & Tiện ích:** PayOS SDK (`payos/payos ^2.0`), Simple QRCode (`^4.2`), Firebase Admin SDK (`kreait/laravel-firebase ^5.10`)
 
-## Laravel Sponsors
+## Cấu trúc thư mục chính
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```text
+ticket_backend/
+├── app/Http/Controllers/
+│   ├── Auth/            # Đăng nhập, đăng ký, Google login, quên mật khẩu
+│   ├── Customers/       # Trang chủ, tìm kiếm, chi tiết, giỏ hàng, thanh toán, đơn hàng, review, report
+│   ├── Organizers/      # Tạo & quản lý sự kiện của ban tổ chức
+│   └── Admin/           # Dashboard, duyệt sự kiện, quản lý đơn hàng/đánh giá/báo cáo
+├── config/services.php  # Cấu hình PayOS & Firebase credentials
+├── database/
+│   ├── migrations/      # Cấu trúc bảng cơ sở dữ liệu
+│   └── seeders/         # Dữ liệu mẫu (SampleEventsSeeder, UpcomingEventsSeeder, WeeklyEventsSeeder, ...)
+├── routes/api.php       # Toàn bộ định tuyến API
+└── .env.example         # Cấu hình biến môi trường mẫu
+```
 
-### Premium Partners
+---
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+## Hướng dẫn cài đặt và chạy dự án
 
-## Contributing
+### Yêu cầu môi trường
+- **PHP:** `>= 8.1` (đầy đủ các extension chuẩn của Laravel)
+- **Composer**
+- **MySQL** (hoặc MariaDB tương thích)
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### Các bước thực hiện
 
-## Code of Conduct
+1. **Cài đặt dependencies:**
+   ```sh
+   cd ticket_backend
+   composer install
+   ```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+2. **Tạo và cấu hình file `.env`:**
+   ```sh
+   cp .env.example .env
+   php artisan key:generate
+   ```
+   Cập nhật các thông số trong `.env`:
+   - **Database:** `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`
+   - **Mail (gửi mã xác thực/quên mật khẩu):** `MAIL_MAILER`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`
+   - **PayOS (nếu test thanh toán online):**
+     ```env
+     PAYOS_CLIENT_ID=
+     PAYOS_API_KEY=
+     PAYOS_CHECKSUM_KEY=
+     ```
+   - *(Nếu sử dụng Firebase Admin SDK)* Đặt file credentials tại `storage/firebase_credentials.json` theo cấu hình trong `config/services.php`.
 
-## Security Vulnerabilities
+3. **Khởi tạo cơ sở dữ liệu & Passport:**
+   ```sh
+   php artisan migrate
+   php artisan passport:install
+   ```
+   *(Tùy chọn)* Nạp dữ liệu mẫu nếu cần:
+   ```sh
+   php artisan db:seed
+   ```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-"# Ticket_Backend" 
-"# Ticket_Backend" 
+4. **Khởi chạy server API:**
+   ```sh
+   php artisan serve
+   ```
+   Mặc định backend sẽ chạy tại `http://127.0.0.1:8000` (API prefix: `/api`).
