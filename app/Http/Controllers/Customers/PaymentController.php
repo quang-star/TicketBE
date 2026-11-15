@@ -111,7 +111,7 @@ class PaymentController extends Controller
         try {
             $order = Order::create([
                 'user_id' => $userId,
-                'order_code' => '',
+                'order_code' => 'TMP-' . uniqid('', true),
                 'total_amount' => 0,
                 'discount_amount' => 0,
                 'final_amount' => 0,
@@ -168,13 +168,31 @@ class PaymentController extends Controller
 
             $order->update(['total_amount' => $total, 'final_amount' => $total]);
 
+            if ($total <= 0) {
+                DB::commit();
+                $this->finalizePaidOrder($order);
+
+                return response()->json([
+                    'code' => 200,
+                    'message' => 'Đơn hàng miễn phí đã được xác nhận',
+                    'data' => [
+                        'order_id' => $order->id,
+                        'order_code' => $order->order_code,
+                        'checkout_url' => null,
+                    ],
+                ]);
+            }
+
             Log::info('payload_payos', ['order_id' => $order->id, 'order_code' => $orderCode]);
 
             $paymentLink = PayOSService::createPaymentLink($order, $orderItemsData);
 
             if (!$paymentLink || !isset($paymentLink['checkoutUrl'])) {
                 DB::rollBack();
-                return response()->json(['code' => 500, 'message' => 'Lỗi tạo link thanh toán'], 500);
+                return response()->json([
+                    'code' => 500,
+                    'message' => 'Không thể khởi tạo link thanh toán PayOS.',
+                ], 500);
             }
 
             DB::commit();
