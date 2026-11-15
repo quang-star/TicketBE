@@ -14,11 +14,15 @@ class PayOSService
     private function client(): PayOS
     {
         if ($this->payOS === null) {
-            $this->payOS = new PayOS(
-                env('PAYOS_CLIENT_ID', ''),
-                env('PAYOS_API_KEY', ''),
-                env('PAYOS_CHECKSUM_KEY', '')
-            );
+            $clientId = (string) config('services.payos.client_id', '');
+            $apiKey = (string) config('services.payos.api_key', '');
+            $checksumKey = (string) config('services.payos.checksum_key', '');
+
+            if ($clientId === '' || $apiKey === '' || $checksumKey === '') {
+                throw new \RuntimeException('PayOS credentials are not configured (PAYOS_CLIENT_ID / PAYOS_API_KEY / PAYOS_CHECKSUM_KEY).');
+            }
+
+            $this->payOS = new PayOS($clientId, $apiKey, $checksumKey);
         }
 
         return $this->payOS;
@@ -33,11 +37,19 @@ class PayOSService
         $cancelUrlWithId = url('api/payment/payos/cancel') . '?ref_id=' . $order->id;
 
         try {
+            $normalizedItems = array_map(static function (array $item): array {
+                return [
+                    'name' => mb_substr((string) ($item['name'] ?? 'Ve su kien'), 0, 100),
+                    'quantity' => (int) ($item['quantity'] ?? 1),
+                    'price' => (int) ($item['price'] ?? 0),
+                ];
+            }, $items);
+
             $data = [
                 'orderCode' => (int) $order->order_code,
                 'amount' => (int) $order->final_amount,
-                'description' => "Thanh toán đơn hàng #{$order->id}",
-                'items' => $items,
+                'description' => "Don hang #{$order->id}",
+                'items' => $normalizedItems,
                 'returnUrl' => $returnUrlWithId,
                 'cancelUrl' => $cancelUrlWithId,
                 'expiredAt' => Carbon::now()->addMinutes(10)->timestamp,
