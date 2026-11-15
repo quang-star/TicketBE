@@ -43,8 +43,23 @@ class SearchController extends Controller
         }
 
         if (!empty($local) && $local !== 'all') {
-            $query->whereHas('venue', function ($v) use ($local) {
-                if (is_numeric($local)) {
+            $cityGroups = [
+                '01' => ['01', '1', 'Hà Nội', 'Hanoi', 'Ha Noi'],
+                '1'  => ['01', '1', 'Hà Nội', 'Hanoi', 'Ha Noi'],
+                '79' => ['79', 'Ho Chi Minh', 'Hồ Chí Minh', 'TP. Hồ Chí Minh', 'TP.HCM', 'HCM'],
+                '48' => ['48', 'Đà Nẵng', 'Danang', 'Da Nang'],
+                '42' => ['42', 'Đà Lạt', 'Da Lat', 'Lâm Đồng', 'Lam Dong'],
+            ];
+
+            $query->whereHas('venue', function ($v) use ($local, $cityGroups) {
+                if ($local === 'other') {
+                    $majorCities = array_values(array_unique(array_merge(...array_values($cityGroups))));
+                    $v->whereNotNull('city')
+                      ->where('city', '!=', '')
+                      ->whereNotIn('city', $majorCities);
+                } elseif (isset($cityGroups[$local])) {
+                    $v->whereIn('city', $cityGroups[$local]);
+                } elseif (is_numeric($local)) {
                     $v->where('city', $local);
                 } else {
                     $v->where('city', 'LIKE', '%' . $local . '%');

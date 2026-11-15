@@ -256,6 +256,23 @@ class TicketSystemTest extends TestCase
         // Repeat cancel does not double-restore stock
         $this->get('/api/payment/payos/cancel?orderCode=' . $cancelCode)->assertRedirect();
         $this->assertEquals(3, $ticketType->fresh()->available_quantity);
+
+        // Free ticket order (0 VND) finalizes immediately without calling PayOS
+        $freeSeeded = $this->seedPublishedEvent(stock: 4, price: 0);
+        $freeTicketType = $freeSeeded['ticketType'];
+
+        $freeOrderRes = $this->postJson('/api/create-order', [
+            'items' => [
+                ['ticket_type_id' => $freeTicketType->id, 'quantity' => 1],
+            ],
+            'payment_method' => 'payos',
+        ])->assertStatus(200)
+            ->assertJsonPath('code', 200)
+            ->assertJsonPath('data.checkout_url', null);
+
+        $freeOrderId = $freeOrderRes->json('data.order_id');
+        $this->assertEquals('paid', Order::find($freeOrderId)->payment_status);
+        $this->assertEquals(3, $freeTicketType->fresh()->available_quantity);
     }
 
     public function test_reviews_moderation_reports_and_profile_password(): void
